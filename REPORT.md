@@ -71,14 +71,18 @@ putchar((mode & S_ISUID) ? 's' : (mode & S_IXUSR) ? 'x' : '-');
 
 **Answer:**
 * **General Logic:**
-  Standard terminals print output line by line (row by row), from top to bottom. In a "down then across" layout with $N$ items and $C$ columns:
+  Standard terminals print output line by line (row by row), from top to bottom. In a "down then across" layout with `N` items and `C` columns:
   1. Determine the number of rows needed using ceiling division:
-     $$\text{num\_rows} = \left\lceil \frac{N}{C} \right\rceil = \frac{N + C - 1}{C}$$
-  2. For any given row $r \in [0, \text{num\_rows}-1]$ and column $c \in [0, C-1]$, the item index in our sorted flat array is:
-     $$\text{index} = r + c \times \text{num\_rows}$$
-  3. We execute an outer loop iterating over each row $r$ from $0$ to $\text{num\_rows}-1$, and an inner loop iterating over column $c$ from $0$ to $C-1$. If $\text{index} < N$, we print the item formatted with padding up to the column width. When the row finishes, we emit a newline `\n`.
+     ```
+     num_rows = ceil(N / C) = (N + C - 1) / C
+     ```
+  2. For any given row `r` (where `0 <= r < num_rows`) and column `c` (where `0 <= c < C`), the item index in our sorted flat array is:
+     ```
+     index = r + c * num_rows
+     ```
+  3. We execute an outer loop iterating over each row `r` from `0` to `num_rows - 1`, and an inner loop iterating over column `c` from `0` to `C - 1`. If `index < N`, we print the item formatted with padding up to the column width. When the row finishes, we emit a newline `\n`.
 * **Why a single loop is insufficient:**
-  Because terminal printing streams text horizontally across a line before moving to the next line. If you used a simple sequential loop from $i = 0$ to $N-1$, items would naturally be placed horizontally (row-major: item 0, item 1, item 2 on the first row). To make items flow vertically down column 1 before starting column 2, the printer must access non-contiguous indices across the array ($0, \text{num\_rows}, 2\times\text{num\_rows}, \dots$) during the first line output. This requires pre-calculating `num_rows` and indexing by $(r + c \times \text{num\_rows})$.
+  Because terminal printing streams text horizontally across a line before moving to the next line. If you used a simple sequential loop from `i = 0` to `N - 1`, items would naturally be placed horizontally (row-major: item 0, item 1, item 2 on the first row). To make items flow vertically down column 1 before starting column 2, the printer must access non-contiguous indices across the array (`0`, `num_rows`, `2 * num_rows`, `...`) during the first line output. This requires pre-calculating `num_rows` and indexing by `r + c * num_rows`.
 
 ---
 
@@ -102,7 +106,7 @@ Dynamically detecting width via `ioctl` guarantees that the utility always maxim
 * **Pre-calculation Comparison:**
   The "down then across" (vertical) mode requires significantly more pre-calculation.
   * **"Down then across" (Vertical):** Requires determining the column width, computing the total number of columns that fit, computing the exact number of rows (`num_rows = (count + num_cols - 1) / num_cols`), and computing non-contiguous array indices `r + c * num_rows` for every cell. All filenames must be completely counted and organized into a 2D mathematical grid before a single character can be printed.
-  * **"Across" (Horizontal):** Operates sequentially (row-major order). It only needs the column width and terminal width. It iterates from index $0$ to $N-1$ in simple linear order, tracking current cursor position `pos`. When `pos + col_width > term_width`, it emits `\n` and resets `pos = 0`.
+  * **"Across" (Horizontal):** Operates sequentially (row-major order). It only needs the column width and terminal width. It iterates from index `0` to `N - 1` in simple linear order, tracking current cursor position `pos`. When `pos + col_width > term_width`, it emits `\n` and resets `pos = 0`.
 * **Conclusion:**
   "Down then across" has higher implementation complexity and strictly requires pre-calculating grid geometry, whereas horizontal layout directly mirrors standard terminal streaming order.
 

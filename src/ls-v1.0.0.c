@@ -1,14 +1,16 @@
 /*
- * Programming Assignment 02: ls-v1.5.0
+ * Programming Assignment 02: ls-v1.6.0
  * Features: Long listing (-l) + Column display + Horizontal display (-x)
- *           + Alphabetical sort + Colorized output
+ *           + Alphabetical sort + Colorized output + Recursive listing (-R)
  * Instructor: Muhammad Arif Butt, PhD
  *
  * Usage:
- *   $ ./bin/ls               # column display (down-then-across, sorted, colored)
- *   $ ./bin/ls -l            # long listing (sorted, colored)
- *   $ ./bin/ls -x            # horizontal display (across, sorted, colored)
- *   $ ./bin/ls [directory...]
+ *   $ ./bin/ls                 # column display (down-then-across, sorted, colored)
+ *   $ ./bin/ls -l              # long listing
+ *   $ ./bin/ls -x              # horizontal display
+ *   $ ./bin/ls -R              # recursive directory traversal
+ *   $ ./bin/ls -lR             # long listing recursive
+ *   $ ./bin/ls [options] [dir...]
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,11 +39,13 @@ extern int errno;
 #define MODE_LONG       1   /* -l long listing */
 #define MODE_HORIZONTAL 2   /* -x horizontal (left-to-right) */
 
-static int display_mode = MODE_DEFAULT;
+static int display_mode   = MODE_DEFAULT;
+static int recursive_flag = 0;
+static int first_dir      = 1;
 
 /* Forward declarations */
 void do_ls(const char *dir);
-void do_ls_long(const char *dir);
+void do_ls_long(const char *dir, char **names, int count);
 void print_permissions(mode_t mode);
 void print_columns(const char *dir, char **names, int count);
 void print_horizontal(const char *dir, char **names, int count);
@@ -65,7 +69,7 @@ int compare_str(const void *a, const void *b)
 int main(int argc, char *argv[])
 {
     int opt;
-    while ((opt = getopt(argc, argv, "lx")) != -1) {
+    while ((opt = getopt(argc, argv, "lxR")) != -1) {
         switch (opt) {
             case 'l':
                 display_mode = MODE_LONG;
@@ -73,8 +77,11 @@ int main(int argc, char *argv[])
             case 'x':
                 display_mode = MODE_HORIZONTAL;
                 break;
+            case 'R':
+                recursive_flag = 1;
+                break;
             default:
-                fprintf(stderr, "Usage: %s [-l|-x] [directory...]\n", argv[0]);
+                fprintf(stderr, "Usage: %s [-l|-x] [-R] [directory...]\n", argv[0]);
                 exit(EXIT_FAILURE);
         }
     }
@@ -82,9 +89,13 @@ int main(int argc, char *argv[])
     if (optind >= argc) {
         do_ls(".");
     } else {
+        int multiple = (argc - optind > 1);
         for (int i = optind; i < argc; i++) {
-            if (argc - optind > 1)
-                printf("\n%s:\n", argv[i]);
+            if (!recursive_flag && multiple) {
+                if (i > optind)
+                    putchar('\n');
+                printf("%s:\n", argv[i]);
+            }
             do_ls(argv[i]);
         }
     }
@@ -249,7 +260,11 @@ void print_columns(const char *dir, char **names, int count)
                 break;
 
             char path[4096];
-            snprintf(path, sizeof(path), "%s/%s", dir, names[idx]);
+            if (dir[strlen(dir) - 1] == '/')
+                snprintf(path, sizeof(path), "%s%s", dir, names[idx]);
+            else
+                snprintf(path, sizeof(path), "%s/%s", dir, names[idx]);
+
             struct stat st;
             if (lstat(path, &st) == -1)
                 memset(&st, 0, sizeof(st));
@@ -293,7 +308,11 @@ void print_horizontal(const char *dir, char **names, int count)
         }
 
         char path[4096];
-        snprintf(path, sizeof(path), "%s/%s", dir, names[i]);
+        if (dir[strlen(dir) - 1] == '/')
+            snprintf(path, sizeof(path), "%s%s", dir, names[i]);
+        else
+            snprintf(path, sizeof(path), "%s/%s", dir, names[i]);
+
         struct stat st;
         if (lstat(path, &st) == -1)
             memset(&st, 0, sizeof(st));
@@ -338,7 +357,7 @@ void print_permissions(mode_t mode)
 /*
  * do_ls_long - long listing format (-l) with colorization
  */
-void do_ls_long(const char *dir)
+void do_ls_long(const char *dir, char **names, int count)
 {
     struct stat   st;
     struct passwd *pw;
@@ -346,14 +365,12 @@ void do_ls_long(const char *dir)
     char          path[4096];
     char          timebuf[64];
     time_t        mtime;
-    int           count = 0;
-
-    char **names = read_names(dir, &count);
-    if (!names)
-        return;
 
     for (int i = 0; i < count; i++) {
-        snprintf(path, sizeof(path), "%s/%s", dir, names[i]);
+        if (dir[strlen(dir) - 1] == '/')
+            snprintf(path, sizeof(path), "%s%s", dir, names[i]);
+        else
+            snprintf(path, sizeof(path), "%s/%s", dir, names[i]);
 
         if (lstat(path, &st) == -1) {
             perror(path);
@@ -384,18 +401,18 @@ void do_ls_long(const char *dir)
         print_colored_name(names[i], st.st_mode);
         putchar('\n');
     }
-
-    free_names(names, count);
 }
 
 /*
- * do_ls - main dispatcher: reads names then calls appropriate display function
+ * do_ls - main directory listing function (recursive when recursive_flag is set)
  */
 void do_ls(const char *dir)
 {
-    if (display_mode == MODE_LONG) {
-        do_ls_long(dir);
-        return;
+    if (recursive_flag) {
+        if (!first_dir)
+            putchar('\n');
+        printf("%s:\n", dir);
+        first_dir = 0;
     }
 
     int    count = 0;
@@ -403,10 +420,32 @@ void do_ls(const char *dir)
     if (!names)
         return;
 
-    if (display_mode == MODE_HORIZONTAL)
+    if (display_mode == MODE_LONG)
+        do_ls_long(dir, names, count);
+    else if (display_mode == MODE_HORIZONTAL)
         print_horizontal(dir, names, count);
     else
         print_columns(dir, names, count);   /* MODE_DEFAULT */
+
+    /* If recursive mode is active, descend into subdirectories */
+    if (recursive_flag) {
+        for (int i = 0; i < count; i++) {
+            char subpath[4096];
+            if (dir[strlen(dir) - 1] == '/')
+                snprintf(subpath, sizeof(subpath), "%s%s", dir, names[i]);
+            else
+                snprintf(subpath, sizeof(subpath), "%s/%s", dir, names[i]);
+
+            struct stat st;
+            if (lstat(subpath, &st) == -1)
+                continue;
+
+            /* Check if entry is a directory (and lstat confirms it's not a symlink) */
+            if (S_ISDIR(st.st_mode)) {
+                do_ls(subpath);
+            }
+        }
+    }
 
     free_names(names, count);
 }

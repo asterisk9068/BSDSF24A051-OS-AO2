@@ -355,52 +355,158 @@ void print_permissions(mode_t mode)
 }
 
 /*
- * do_ls_long - long listing format (-l) with colorization
+ * format_ctime - formats timestamp using ctime() without strftime.
+ * Returns 12-character string: "Mmm dd hh:mm" or "Mmm dd  yyyy" (if > 6 months or in the future).
+ */
+static void format_ctime(time_t mtime, char *out, size_t out_len)
+{
+    time_t now = time(NULL);
+    char *c = ctime(&mtime);
+    if (!c || strlen(c) < 24) {
+        snprintf(out, out_len, "%-12s", "");
+        return;
+    }
+
+    /* Six months threshold (~182 days in seconds) */
+    time_t six_months_sec = 182L * 24L * 60L * 60L;
+
+    if (mtime > now || (now - mtime) > six_months_sec) {
+        /* Older than 6 months or in the future: "Mmm dd  yyyy" */
+        snprintf(out, out_len, "%.6s  %.4s", c + 4, c + 20);
+    } else {
+        /* Within last 6 months: "Mmm dd hh:mm" */
+        snprintf(out, out_len, "%.12s", c + 4);
+    }
+}
+
+/*
+ * Structure to hold metadata for dynamic-width formatting in long listing
+ */
+struct entry_info {
+    char        *name;
+    struct stat  st;
+    int          valid;
+    char         owner[64];
+    char         group[64];
+    char         time_str[32];
+    char         target[4096];
+    int          is_link;
+};
+
+/*
+ * do_ls_long - long listing format (-l) with dynamic column widths and total line
  */
 void do_ls_long(const char *dir, char **names, int count)
 {
-    struct stat   st;
-    struct passwd *pw;
-    struct group  *gr;
-    char          path[4096];
-    char          timebuf[64];
-    time_t        mtime;
+    if (count == 0) {
+        printf("total 0\n");
+        return;
+    }
+
+    struct entry_info *items = calloc(count, sizeof(struct entry_info));
+    if (!items) {
+        perror("calloc");
+        return;
+    }
+
+    long long total_blocks = 0;
+    int max_link_len = 1;
+    int max_owner_len = 1;
+    int max_group_len = 1;
+    int max_size_len = 1;
 
     for (int i = 0; i < count; i++) {
+        items[i].name = names[i];
+
+        char path[4096];
         if (dir[strlen(dir) - 1] == '/')
             snprintf(path, sizeof(path), "%s%s", dir, names[i]);
         else
             snprintf(path, sizeof(path), "%s/%s", dir, names[i]);
 
-        if (lstat(path, &st) == -1) {
+        if (lstat(path, &items[i].st) == -1) {
             perror(path);
+            items[i].valid = 0;
             continue;
         }
 
-        print_permissions(st.st_mode);
-        printf(" %2lu", (unsigned long)st.st_nlink);
+        items[i].valid = 1;
+        total_blocks += items[i].st.st_blocks;
 
-        pw = getpwuid(st.st_uid);
+        /* Owner */
+        struct passwd *pw = getpwuid(items[i].st.st_uid);
         if (pw)
-            printf(" %-8s", pw->pw_name);
+            snprintf(items[i].owner, sizeof(items[i].owner), "%s", pw->pw_name);
         else
-            printf(" %-8u", st.st_uid);
+            snprintf(items[i].owner, sizeof(items[i].owner), "%u", items[i].st.st_uid);
 
-        gr = getgrgid(st.st_gid);
+        int u_len = (int)strlen(items[i].owner);
+        if (u_len > max_owner_len)
+            max_owner_len = u_len;
+
+        /* Group */
+        struct group *gr = getgrgid(items[i].st.st_gid);
         if (gr)
-            printf(" %-8s", gr->gr_name);
+            snprintf(items[i].group, sizeof(items[i].group), "%s", gr->gr_name);
         else
-            printf(" %-8u", st.st_gid);
+            snprintf(items[i].group, sizeof(items[i].group), "%u", items[i].st.st_gid);
 
-        printf(" %8lld", (long long)st.st_size);
+        int g_len = (int)strlen(items[i].group);
+        if (g_len > max_group_len)
+            max_group_len = g_len;
 
-        mtime = st.st_mtime;
-        strftime(timebuf, sizeof(timebuf), "%b %e %H:%M", localtime(&mtime));
-        printf(" %s ", timebuf);
+        /* Link count */
+        char link_buf[32];
+        snprintf(link_buf, sizeof(link_buf), "%lu", (unsigned long)items[i].st.st_nlink);
+        int l_len = (int)strlen(link_buf);
+        if (l_len > max_link_len)
+            max_link_len = l_len;
 
-        print_colored_name(names[i], st.st_mode);
+        /* Size */
+        char size_buf[32];
+        snprintf(size_buf, sizeof(size_buf), "%lld", (long long)items[i].st.st_size);
+        int s_len = (int)strlen(size_buf);
+        if (s_len > max_size_len)
+            max_size_len = s_len;
+
+        /* Timestamp formatted via ctime() */
+        format_ctime(items[i].st.st_mtime, items[i].time_str, sizeof(items[i].time_str));
+
+        /* Symlink target via readlink() */
+        if (S_ISLNK(items[i].st.st_mode)) {
+            ssize_t len = readlink(path, items[i].target, sizeof(items[i].target) - 1);
+            if (len != -1) {
+                items[i].target[len] = '\0';
+                items[i].is_link = 1;
+            }
+        }
+    }
+
+    /* Print total N line (1K blocks) */
+    printf("total %lld\n", total_blocks / 2);
+
+    /* Print entries with dynamic column widths */
+    for (int i = 0; i < count; i++) {
+        if (!items[i].valid)
+            continue;
+
+        print_permissions(items[i].st.st_mode);
+        printf(" %*lu %-*s %-*s %*lld %s ",
+               max_link_len, (unsigned long)items[i].st.st_nlink,
+               max_owner_len, items[i].owner,
+               max_group_len, items[i].group,
+               max_size_len, (long long)items[i].st.st_size,
+               items[i].time_str);
+
+        print_colored_name(items[i].name, items[i].st.st_mode);
+
+        if (items[i].is_link) {
+            printf(" -> %s", items[i].target);
+        }
         putchar('\n');
     }
+
+    free(items);
 }
 
 /*

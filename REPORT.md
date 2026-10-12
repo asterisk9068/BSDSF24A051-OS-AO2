@@ -3,7 +3,7 @@
 **Course:** Operating Systems  
 **Instructor:** Muhammad Arif Butt, PhD  
 **Student Roll Number:** BSDSF24A051  
-**Repository:** `BSDSF24A051-OS-AO2`
+**Repository:** `BSDSF24A051-OS-A02`
 
 ---
 

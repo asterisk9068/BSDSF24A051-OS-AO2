@@ -39,6 +39,20 @@ void print_horizontal(char **names, int count);
 int  get_terminal_width(void);
 char **read_names(const char *dir, int *count);
 void free_names(char **names, int count);
+int  compare_str(const void *a, const void *b);
+
+/*
+ * compare_str - comparison function for qsort() on arrays of char*
+ *
+ * qsort passes pointers to elements; since our array holds char*,
+ * each element pointer is a char**, so we cast and dereference.
+ */
+int compare_str(const void *a, const void *b)
+{
+    const char *sa = *(const char **)a;
+    const char *sb = *(const char **)b;
+    return strcmp(sa, sb);
+}
 
 int main(int argc, char *argv[])
 {
@@ -134,6 +148,10 @@ char **read_names(const char *dir, int *count)
         perror("readdir failed");
 
     closedir(dp);
+
+    /* Sort alphabetically using qsort */
+    qsort(names, n, sizeof(char *), compare_str);
+
     *count = n;
     return names;
 }
@@ -257,30 +275,25 @@ void print_permissions(mode_t mode)
 }
 
 /*
- * do_ls_long - long listing format (-l)
+ * do_ls_long - long listing format (-l), now uses sorted read_names()
  */
 void do_ls_long(const char *dir)
 {
-    struct dirent *entry;
     struct stat   st;
     struct passwd *pw;
     struct group  *gr;
     char          path[4096];
     char          timebuf[64];
     time_t        mtime;
+    int           count = 0;
 
-    DIR *dp = opendir(dir);
-    if (dp == NULL) {
-        fprintf(stderr, "Cannot open directory: %s\n", dir);
+    /* Read and sort names using the shared helper */
+    char **names = read_names(dir, &count);
+    if (!names)
         return;
-    }
 
-    errno = 0;
-    while ((entry = readdir(dp)) != NULL) {
-        if (entry->d_name[0] == '.')
-            continue;
-
-        snprintf(path, sizeof(path), "%s/%s", dir, entry->d_name);
+    for (int i = 0; i < count; i++) {
+        snprintf(path, sizeof(path), "%s/%s", dir, names[i]);
 
         if (lstat(path, &st) == -1) {
             perror(path);
@@ -308,14 +321,12 @@ void do_ls_long(const char *dir)
         strftime(timebuf, sizeof(timebuf), "%b %e %H:%M", localtime(&mtime));
         printf(" %s", timebuf);
 
-        printf(" %s\n", entry->d_name);
+        printf(" %s\n", names[i]);
     }
 
-    if (errno != 0)
-        perror("readdir failed");
-
-    closedir(dp);
+    free_names(names, count);
 }
+
 
 /*
  * do_ls - main dispatcher: reads names then calls appropriate display function
